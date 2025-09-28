@@ -171,7 +171,7 @@ def train_classifier(args, train, dev):
             ex = train[i]
             
             #Forward pass, loss computation, backward pass, and optimization step  
-            log_probs = model(ex.input_tensor)             
+            log_probs, _ = model(ex.input_tensor)             
             loss = loss_function(log_probs, ex.output_tensor)      
             optimizer.zero_grad()
             loss.backward()
