@@ -73,7 +73,7 @@ def train_lm(args, train_text, dev_text, vocab_index):
     V = len(vocab_index)
     seq_len = 128
     batch_size = 256 if torch.cuda.is_available() else 128
-    epochs = 10
+    epochs = 20
     stride = 32
     lr = 0.01
 
