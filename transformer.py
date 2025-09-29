@@ -29,7 +29,7 @@ class LetterCountingExample(object):
 # a single layer of the Transformer; this Module will take the raw words as input and do all of the steps necessary
 # to return distributions over the labels (0, 1, or 2).
 class Transformer(nn.Module):
-    def __init__(self, vocab_size, num_positions, d_model, d_internal, num_classes, num_layers=2):
+    def __init__(self, vocab_size, num_positions, d_model, d_internal, num_classes, num_layers=2, attention_type="standard", alibi_slope: float = 1.0):
         """
         :param vocab_size: vocabulary size of the embedding layer
         :param num_positions: max sequence length that will be fed to the model; should be 20
@@ -42,7 +42,7 @@ class Transformer(nn.Module):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.positional_encoding = PositionalEncoding(d_model, num_positions)
-        self.layers = nn.ModuleList([TransformerLayer(d_model, d_internal) for x in range(num_layers)])
+        self.layers = nn.ModuleList([TransformerLayer(d_model, d_internal, attention_type=attention_type, alibi_slope=alibi_slope) for x in range(num_layers)])
         self.classifier = nn.Linear(d_model, num_classes)
         self.log_softmax = nn.LogSoftmax(dim=1)
 
@@ -71,7 +71,7 @@ class Transformer(nn.Module):
 # Your implementation of the Transformer layer goes here. It should take vectors and return the same number of vectors
 # of the same length, applying self-attention, the feedforward layer, etc.
 class TransformerLayer(nn.Module):
-    def __init__(self, d_model, d_internal):
+    def __init__(self, d_model, d_internal, attention_type="standard",  alibi_slope: float = 1.0):
         """
         :param d_model: The dimension of the inputs and outputs of the layer (note that the inputs and outputs
         have to be the same size for the residual connection to work)
@@ -83,7 +83,9 @@ class TransformerLayer(nn.Module):
         self.query = nn.Linear(d_model, d_internal, bias=False, device="cuda" if torch.cuda.is_available() else "cpu")
         self.key = nn.Linear(d_model, d_internal, bias=False, device="cuda" if torch.cuda.is_available() else "cpu")
         self.value = nn.Linear(d_model, d_model, bias=False, device="cuda" if torch.cuda.is_available() else "cpu")
-
+        self.attention_type = attention_type
+        if attention_type == "alibi":
+            self.register_buffer("alibi_slope", torch.tensor(float(alibi_slope), dtype=torch.float32))
         #feed-forward network
         self.ffn = nn.Sequential(
             nn.Linear(d_model, 5 * d_model, device="cuda" if torch.cuda.is_available() else "cpu"),
@@ -93,13 +95,22 @@ class TransformerLayer(nn.Module):
 
     def forward(self, input_vecs):
         #initialize Q, K, V matrices
+        T = input_vecs.size(0)
         Q = self.query(input_vecs)                      
         K = self.key(input_vecs)                      
         V = self.value(input_vecs)                      
 
         # Scaled dot-product attention
         dk = K.shape[-1]
-        scores = (Q @ K.T) / np.sqrt(dk)              
+        scores = (Q @ K.T) / np.sqrt(dk)   
+        
+        if self.attention_type == "alibi":
+            # Add ALiBi bias to the attention scores
+            i = torch.arange(T, device=input_vecs.device).unsqueeze(1)  # [T,1]
+            j = torch.arange(T, device=input_vecs.device).unsqueeze(0)  # [1,T]
+            dist = (i - j).abs().to(torch.float32)                      # [T,T]
+            scores = scores - self.alibi_slope * dist  
+                       
         attention = torch.softmax(scores, dim=1)           
         context = attention @ V   
 
@@ -153,7 +164,9 @@ def train_classifier(args, train, dev):
     num_classes = 3
     num_positions = 20
     vocab_size =  27  
-    model = Transformer(vocab_size, num_positions, d_model, d_internal, num_classes, num_layers)
+    attention_type = "standard"  
+    alibi_slope = 1.0
+    model = Transformer(vocab_size, num_positions, d_model, d_internal, num_classes, num_layers, attention_type=attention_type, alibi_slope=alibi_slope)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     loss_function = nn.NLLLoss() 
     
